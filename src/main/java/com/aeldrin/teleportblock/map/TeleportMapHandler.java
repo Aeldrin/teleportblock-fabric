@@ -1,0 +1,158 @@
+package com.aeldrin.teleportblock.map;
+
+import com.aeldrin.teleportblock.ModMapDecorations;
+import com.aeldrin.teleportblock.mixin.MapItemSavedDataAccessor;
+import net.minecraft.core.Holder;
+import net.minecraft.core.component.DataComponents;
+import net.minecraft.nbt.CompoundTag;
+import net.minecraft.nbt.ListTag;
+import net.minecraft.nbt.Tag;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
+import net.minecraft.world.item.MapItem;
+import net.minecraft.world.item.component.CustomData;
+import net.minecraft.world.level.saveddata.maps.MapDecorationType;
+import net.minecraft.world.level.saveddata.maps.MapItemSavedData;
+import org.jetbrains.annotations.Nullable;
+
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * Handles TeleportBlock map marker persistence and decoration refresh.
+ *
+ * Markers are stored in the map ItemStack's CUSTOM_DATA component
+ * under the key "teleportblock_markers". Each tick (throttled),
+ * markers are re-applied as map decorations so they survive save/reload.
+ */
+public class TeleportMapHandler {
+
+	private static final String NBT_KEY = "teleportblock_markers";
+
+	// === Data record for a single marker ===
+	public record TeleportMarker(int x, int z, int color, @Nullable String name) {
+
+		public CompoundTag toTag() {
+			CompoundTag tag = new CompoundTag();
+			tag.putInt("x", x);
+			tag.putInt("z", z);
+			tag.putInt("color", color);
+			if (name != null) tag.putString("name", name);
+			return tag;
+		}
+
+		public static TeleportMarker fromTag(CompoundTag tag) {
+			return new TeleportMarker(
+					tag.getInt("x"),
+					tag.getInt("z"),
+					tag.getInt("color"),
+					tag.contains("name") ? tag.getString("name") : null
+			);
+		}
+	}
+
+	// === Store markers on the map ItemStack ===
+
+	/**
+	 * Saves a pair of teleport markers to the map ItemStack.
+	 * Called when the player right-clicks a TeleportBlock with a filled map.
+	 */
+	public static void addMarkersToMap(ItemStack mapStack, int x1, int z1, int x2, int z2,
+										int color, @Nullable String linkName) {
+		// Read existing markers
+		List<TeleportMarker> markers = readMarkers(mapStack);
+
+		// Remove old markers at same positions (update scenario)
+		markers.removeIf(m -> (m.x() == x1 && m.z() == z1) || (m.x() == x2 && m.z() == z2));
+
+		// Add new pair
+		markers.add(new TeleportMarker(x1, z1, color, linkName));
+		markers.add(new TeleportMarker(x2, z2, color, linkName));
+
+		// Write back
+		writeMarkers(mapStack, markers);
+	}
+
+	/**
+	 * Saves a single teleport marker (2.2). Used when the paired block is in another
+	 * dimension: its marker would make no sense on a map of this dimension.
+	 */
+	public static void addMarkerToMap(ItemStack mapStack, int x, int z,
+									   int color, @Nullable String linkName) {
+		List<TeleportMarker> markers = readMarkers(mapStack);
+		markers.removeIf(m -> m.x() == x && m.z() == z);
+		markers.add(new TeleportMarker(x, z, color, linkName));
+		writeMarkers(mapStack, markers);
+	}
+
+	public static List<TeleportMarker> readMarkers(ItemStack mapStack) {
+		List<TeleportMarker> result = new ArrayList<>();
+		CustomData customData = mapStack.getOrDefault(DataComponents.CUSTOM_DATA, CustomData.EMPTY);
+		CompoundTag root = customData.copyTag();
+		if (root.contains(NBT_KEY, Tag.TAG_LIST)) {
+			ListTag list = root.getList(NBT_KEY, Tag.TAG_COMPOUND);
+			for (int i = 0; i < list.size(); i++) {
+				result.add(TeleportMarker.fromTag(list.getCompound(i)));
+			}
+		}
+		return result;
+	}
+
+	private static void writeMarkers(ItemStack mapStack, List<TeleportMarker> markers) {
+		CustomData customData = mapStack.getOrDefault(DataComponents.CUSTOM_DATA, CustomData.EMPTY);
+		CompoundTag root = customData.copyTag();
+		ListTag list = new ListTag();
+		for (TeleportMarker m : markers) {
+			list.add(m.toTag());
+		}
+		root.put(NBT_KEY, list);
+		mapStack.set(DataComponents.CUSTOM_DATA, CustomData.of(root));
+	}
+
+	// === Tick handler: re-apply decorations from stored markers ===
+
+	// Called every server tick for every player (ModEventHandlers - END_SERVER_TICK).
+	// On NeoForge this was a PlayerTickEvent.Post subscriber.
+	public static void tickPlayer(ServerPlayer player) {
+		// 2.2: only the maps in hand, once per second. Before 2.2 the whole inventory was
+		// scanned every 5 seconds for every player: more work, and markers still appeared with
+		// a delay of up to 5 seconds. Decorations stay in the map data once added, and a map is
+		// only visible while held, so refreshing the held maps is enough. A map placed in an item
+		// frame keeps the decorations it got while it was held.
+		if (player.tickCount % 20 != 0) return;
+
+		ItemStack mainHand = player.getMainHandItem();
+		if (mainHand.is(Items.FILLED_MAP)) {
+			refreshDecorations(player, mainHand);
+		}
+		ItemStack offHand = player.getOffhandItem();
+		if (offHand.is(Items.FILLED_MAP)) {
+			refreshDecorations(player, offHand);
+		}
+	}
+
+	// Public since 2.2: TeleportBlock calls it right after adding markers, so they appear instantly.
+	public static void refreshDecorations(Player player, ItemStack mapStack) {
+		List<TeleportMarker> markers = readMarkers(mapStack);
+		if (markers.isEmpty()) return;
+
+		MapItemSavedData mapData = MapItem.getSavedData(mapStack, player.level());
+		if (mapData == null) return;
+
+		Holder<MapDecorationType> holder = ModMapDecorations.TELEPORT_BLOCK;
+
+		for (TeleportMarker marker : markers) {
+			String colorHex = String.format("%06X", marker.color() & 0xFFFFFF);
+			String key = "tp_" + colorHex + "_" + marker.x() + "_" + marker.z();
+
+			// name = null — полностью убирает плашку под иконкой на карте.
+			// Плашка (даже с коротким именем) слишком крупная и перекрывает
+			// содержимое карты, делая её нечитаемой при нескольких маркерах.
+			// addDecoration в ванилле private - вызов через Mixin-аксессор (см. mixin/MapItemSavedDataAccessor)
+			((MapItemSavedDataAccessor) mapData).teleportblock$addDecoration(holder, null, key,
+					(double) marker.x(), (double) marker.z(), 0.0, null);
+		}
+	}
+}

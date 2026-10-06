@@ -1,0 +1,146 @@
+plugins {
+	id 'net.fabricmc.fabric-loom-remap' version "${loom_version}"
+	id 'maven-publish'
+}
+
+version = project.version
+group = project.group
+
+base {
+	archivesName = project.archives_base_name
+}
+
+repositories {
+	// Forge Config API Port (official Maven of its author, hosted on GitHub)
+	maven {
+		name = "Fuzs Mod Resources"
+		url = "https://raw.githubusercontent.com/Fuzss/modresources/main/maven/"
+		content {
+			includeGroup "fuzs.forgeconfigapiport"
+		}
+	}
+	maven {
+		name = "Modrinth"
+		url = "https://api.modrinth.com/maven"
+		content {
+			includeGroup "maven.modrinth"
+		}
+	}
+	maven {
+		name = "shedaniel Maven"
+		url = "https://maven.shedaniel.me/"
+	}
+	// JEI + JourneyMap API
+	maven {
+		name = "BlameJared Maven"
+		url = "https://maven.blamejared.com"
+	}
+	maven {
+		name = "Twelve Iterations Maven"
+		url = "https://maven.twelveiterations.com/repository/maven-public/"
+		content {
+			includeGroup "net.blay09.mods"
+		}
+	}
+	maven {
+		name = "FTB Maven"
+		url = "https://maven.ftb.dev/releases"
+	}
+	maven {
+		name = "Architectury Maven"
+		url = "https://maven.architectury.dev/"
+	}
+	maven {
+		name = "Xaero's Maven"
+		url = "https://chocolateminecraft.com/maven"
+		content {
+			includeGroup "xaero.pac"
+		}
+	}
+	maven {
+		name = "TerraformersMC Maven"
+		url = "https://maven.terraformersmc.com/releases/"
+	}
+}
+
+loom {
+	splitEnvironmentSourceSets()
+
+	// Fixed player name for the dev client. Without it Loom starts the game as a random
+	// "Player123" every launch = a new player each time, so advancements, statistics and
+	// inventory look reset. Dev runs only - does not affect the built mod.
+	runs {
+		client {
+			programArgs "--username", "Dev"
+		}
+	}
+
+	mods {
+		"teleportblock" {
+			sourceSet sourceSets.main
+			sourceSet sourceSets.client
+		}
+	}
+}
+
+dependencies {
+	minecraft "com.mojang:minecraft:${project.minecraft_version}"
+	mappings loom.officialMojangMappings()
+	modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
+	modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
+
+	// Bundled into the mod jar (jar-in-jar): players only need Fabric API
+	include(modApi("fuzs.forgeconfigapiport:forgeconfigapiport-fabric:${project.forgeconfigapiport_version}"))
+
+	// === Optional compat - compile only, the mods themselves are not bundled ===
+	// Versions mirror the ones used by the NeoForge build, with the Fabric artifact of each mod.
+	// If Gradle cannot find one of them, send the error - the exact Fabric artifact name differs
+	// between some Mavens.
+	modCompileOnly "maven.modrinth:jade:adpNvTZS" // Jade 15.10.6+fabric (Modrinth version id)
+	modCompileOnly "mezz.jei:jei-1.21.1-fabric-api:19.27.0.340"
+	modCompileOnly "maven.modrinth:emi:1.1.22+1.21.1+fabric"
+	modCompileOnly "me.shedaniel:RoughlyEnoughItems-api-fabric:16.0.799"
+	modCompileOnly "me.shedaniel:RoughlyEnoughItems-default-plugin-fabric:16.0.799"
+	modCompileOnly "me.shedaniel.cloth:cloth-config-fabric:15.0.140"
+	modCompileOnly "dev.architectury:architectury-fabric:13.0.8"
+	modCompileOnly "maven.modrinth:waystones:nSAwjAk4" // Waystones 21.1.46+fabric-1.21.1 (Modrinth version id)
+	modCompileOnly "maven.modrinth:balm:EghJxg4h" // Balm 21.0.66+fabric-1.21.1 (Modrinth version id)
+	modCompileOnly "dev.ftb.mods:ftb-chunks-fabric:2101.1.14"
+	modCompileOnly "dev.ftb.mods:ftb-library-fabric:2101.1.30"
+	modCompileOnly "dev.ftb.mods:ftb-teams-fabric:2101.1.10"
+	modCompileOnly "xaero.pac:open-parties-and-claims-fabric-1.21.1:0.32.7"
+	modCompileOnly(group: 'info.journeymap', name: 'journeymap-api-fabric', version: '2.0.0-1.21.1-SNAPSHOT') { changing = true }
+
+	// Mod Menu in the dev client, to test the settings button. Optional - remove if not needed.
+	modLocalRuntime "com.terraformersmc:modmenu:11.0.3"
+}
+
+processResources {
+	def version = project.version
+	inputs.property "version", version
+
+	filesMatching("fabric.mod.json") {
+		expand "version": version
+	}
+}
+
+tasks.withType(JavaCompile).configureEach {
+	it.options.release = 21
+	it.options.encoding = "UTF-8"
+}
+
+java {
+	withSourcesJar()
+
+	sourceCompatibility = JavaVersion.VERSION_21
+	targetCompatibility = JavaVersion.VERSION_21
+}
+
+jar {
+	def projectName = project.name
+	inputs.property "projectName", projectName
+
+	from("LICENSE") {
+		rename { "${it}_$projectName" }
+	}
+}

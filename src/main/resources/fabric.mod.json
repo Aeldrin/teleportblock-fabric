@@ -1,0 +1,58 @@
+{
+	"schemaVersion": 1,
+	"id": "teleportblock",
+	"version": "${version}",
+	"name": "Teleport Block",
+	"description": "A simple block that teleports players to a linked block. Shift-click two blocks to link them, right-click to teleport. Supports Name Tags, vanilla maps, Ender Pearls, JourneyMap, Jade, and more.",
+	"authors": [
+		"Aeldrin"
+	],
+	"contact": {
+		"homepage": "https://modrinth.com/mod/teleportblock",
+		"sources": "https://github.com/Aeldrin/teleportblock",
+		"issues": "https://github.com/Aeldrin/teleportblock/issues"
+	},
+	"license": "MIT",
+	"icon": "assets/teleportblock/icon.png",
+	"environment": "*",
+	"entrypoints": {
+		"main": [
+			"com.aeldrin.teleportblock.TeleportBlockMod"
+		],
+		"client": [
+			"com.aeldrin.teleportblock.TeleportBlockClient"
+		],
+		"jade": [
+			"com.aeldrin.teleportblock.compat.jade.TeleportBlockJadePlugin"
+		],
+		"jei_mod_plugin": [
+			"com.aeldrin.teleportblock.compat.jei.TeleportBlockJeiPlugin"
+		],
+		"emi": [
+			"com.aeldrin.teleportblock.compat.emi.TeleportBlockEmiPlugin"
+		],
+		"rei_client": [
+			"com.aeldrin.teleportblock.compat.rei.TeleportBlockReiPlugin"
+		],
+		"journeymap": [
+			"com.aeldrin.teleportblock.compat.journeymap.TeleportBlockJMPlugin"
+		]
+	},
+	"mixins": [
+		"teleportblock.mixins.json",
+		{
+			"config": "teleportblock.client.mixins.json",
+			"environment": "client"
+		}
+	],
+	"depends": {
+		"fabricloader": ">=0.16.0",
+		"minecraft": "1.21.1",
+		"java": ">=21",
+		"fabric-api": "*",
+		"forgeconfigapiport": ">=21.1.0"
+	},
+	"suggests": {
+		"modmenu": "*"
+	}
+}

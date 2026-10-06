@@ -1,0 +1,102 @@
+package com.aeldrin.teleportblock.item;
+
+import com.aeldrin.teleportblock.TeleportMessages;
+import com.aeldrin.teleportblock.block.TeleportBlock;
+import com.aeldrin.teleportblock.block.entity.TeleportBlockEntity;
+import com.aeldrin.teleportblock.compat.waystones.WaystoneCompat;
+import net.minecraft.core.BlockPos;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.sounds.SoundEvents;
+import net.minecraft.sounds.SoundSource;
+import net.minecraft.world.InteractionResult;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.item.BlockItem;
+import net.minecraft.world.item.Item;
+import net.minecraft.world.item.context.UseOnContext;
+import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.entity.BlockEntity;
+import net.minecraft.world.level.block.state.BlockState;
+import net.fabricmc.loader.api.FabricLoader;
+
+import java.util.UUID;
+
+public class TeleportBlockItem extends BlockItem {
+
+	public TeleportBlockItem(Block block, Item.Properties properties) {
+		super(block, properties);
+	}
+
+	@Override
+	public InteractionResult useOn(UseOnContext context) {
+		Level level = context.getLevel();
+		if (level.isClientSide()) return InteractionResult.SUCCESS;
+
+		Player player = context.getPlayer();
+		if (player == null || !player.isShiftKeyDown()) return super.useOn(context);
+
+		BlockPos clickedPos = context.getClickedPos();
+		BlockState clickedState = level.getBlockState(clickedPos);
+
+		// Shift+ПКМ телепортблоком В РУКЕ по уже стоящему TeleportBlock - переключение
+		// активного/пассивного режима (см. TeleportBlock.togglePassiveMode). Специально
+		// отдельный жест от обычной линковки пустой рукой (TeleportBlock.useWithoutItem) -
+		// раньше оба действия делили одну и ту же Shift+ПКМ ветку и конфликтовали друг
+		// с другом через общий PENDING_LINKS, ломая уже существующие связи.
+		if (clickedState.getBlock() instanceof TeleportBlock teleportBlock) {
+			BlockEntity blockEntity = level.getBlockEntity(clickedPos);
+			if (blockEntity instanceof TeleportBlockEntity tbe) {
+				TeleportBlock.togglePassiveMode(level, clickedPos, player, tbe);
+			}
+			return InteractionResult.SUCCESS;
+		}
+
+		if (!FabricLoader.getInstance().isModLoaded("waystones")) return super.useOn(context);
+		if (!(level instanceof ServerLevel serverLevel)) return super.useOn(context);
+
+		UUID waystoneId = WaystoneCompat.getWaystoneIdAt(serverLevel, clickedPos);
+		if (waystoneId == null) return super.useOn(context);
+
+		UUID playerId = player.getUUID();
+
+		if (!TeleportBlock.hasPendingLink(playerId)) {
+			TeleportMessages.chat(player, "teleportblock.message.no_pending_block");
+			return InteractionResult.SUCCESS;
+		}
+
+		// Fix 2.0.1: takePendingLink проверяет, что первый блок в этом же измерении и не на
+		// выгруженном корабле (сообщение игроку отправляет сам). Раньше тут был голый BlockPos,
+		// и getBlockEntity ниже мог полезть в чанк другого измерения / плот-зону Sable.
+		// 2.2: связь с Waystone тоже может быть между измерениями (как и между блоками) -
+		// takePendingLink сам проверит настройки межмировых связей и чёрный список.
+		// Блок ищется в СВОЁМ мире: игрок мог выбрать его в одном измерении, а камень - в другом.
+		// Телепорт потом идёт в мир камня (TeleportBlock.resolveWaystoneLevel).
+		net.minecraft.core.GlobalPos pending = TeleportBlock.takePendingLink(player, level, true);
+		if (pending == null) return InteractionResult.FAIL;
+		BlockPos pendingPos = pending.pos();
+		net.minecraft.world.level.Level blockLevel = serverLevel.getServer().getLevel(pending.dimension());
+
+		TeleportBlockEntity be = blockLevel != null && blockLevel.getBlockEntity(pendingPos) instanceof TeleportBlockEntity tbe ? tbe : null;
+		if (be == null) {
+			TeleportMessages.chat(player, "teleportblock.message.first_not_found");
+			return InteractionResult.FAIL;
+		}
+
+		// Владелец (2.1, опция owner_only): чужую пару нельзя перелинковать на Waystone
+		if (!TeleportBlock.checkCanModify(player, be)) return InteractionResult.FAIL;
+
+		BlockPos waystonePos = WaystoneCompat.getWaystonePos(serverLevel, waystoneId);
+		if (waystonePos == null) {
+			TeleportMessages.chat(player, "teleportblock.message.waystone_not_found");
+			return InteractionResult.FAIL;
+		}
+
+		be.setWaystoneTarget(waystoneId);
+		be.setOwner(player.getUUID());
+		String waystoneName = WaystoneCompat.getWaystoneName(serverLevel, waystoneId);
+		blockLevel.playSound(null, pendingPos, SoundEvents.END_PORTAL_FRAME_FILL, SoundSource.BLOCKS, 1.0f, 1.0f);
+		TeleportMessages.chat(player, "teleportblock.message.linked_to_waystone", waystoneName != null ? waystoneName : "Waystone");
+
+		return InteractionResult.SUCCESS;
+	}
+}
